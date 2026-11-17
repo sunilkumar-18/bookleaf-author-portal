@@ -1,29 +1,36 @@
-// Thin wrapper around the Anthropic SDK: one place for the model choice,
-// timeouts/retries, a circuit breaker, refusal handling and usage logging.
-// The API key is read from the server environment only — this module is never
-// imported by client components.
-import Anthropic from "@anthropic-ai/sdk";
+// Provider-neutral AI client: one place for provider selection, the circuit
+// breaker, refusal/truncation handling and usage logging. Callers describe
+// *what* they need (an AiRequest); adapters in ./providers translate it for
+// Anthropic or Gemini. API keys are read from the server environment only —
+// this module is never imported by client components.
 import { prisma } from "@/lib/db";
+import { AiUnavailableError } from "./errors";
+import * as anthropic from "./providers/anthropic";
+import * as gemini from "./providers/gemini";
 
-export const AI_MODEL = process.env.AI_MODEL || "claude-haiku-5-5";
+export { AiUnavailableError };
 
-let client = null;
-function getClient() {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  // maxRetries: the SDK already retries 408/409/429/5xx and connection errors
-  // with exponential backoff (honouring retry-after). We keep that small so a
-  // degraded API fails fast into our fallback instead of hanging the request.
-  client ??= new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 2 });
-  return client;
-}
+/**
+ * @typedef {object} AiRequest
+ * @property {{ text: string, cache?: boolean }[]} system  Stable instructions first; `cache` marks the end of the cacheable prefix
+ * @property {string} user          The per-request content
+ * @property {number} maxTokens
+ * @property {number} timeoutMs
+ * @property {"low"|"medium"|"high"} effort
+ * @property {false} [reasoning]    false = skip extended reasoning (simple tasks)
+ * @property {object} [jsonSchema]  Constrain the output to this JSON Schema
+ */
 
-/** Thrown when the AI could not produce a usable result. Callers fall back. */
-export class AiUnavailableError extends Error {
-  constructor(reason, cause) {
-    super(reason);
-    this.reason = reason;
-    this.cause = cause;
-  }
+const PROVIDERS = { anthropic, gemini };
+
+/**
+ * The active provider: AI_PROVIDER if set, otherwise the first one with a key
+ * (Anthropic, then Gemini). Null when no AI is configured.
+ */
+function activeProvider() {
+  const forced = PROVIDERS[process.env.AI_PROVIDER?.toLowerCase()];
+  if (forced) return forced.isConfigured() ? forced : null;
+  return [anthropic, gemini].find((p) => p.isConfigured()) ?? null;
 }
 
 // --- Circuit breaker -------------------------------------------------------
@@ -35,42 +42,34 @@ const FAILURE_THRESHOLD = 3;
 const COOL_DOWN_MS = 60_000;
 
 export function aiAvailability() {
-  if (!process.env.ANTHROPIC_API_KEY) return { available: false, reason: "AI is not configured (no API key)" };
+  const provider = activeProvider();
+  if (!provider) return { available: false, reason: "AI is not configured (no API key)" };
   if (Date.now() < breaker.openUntil) return { available: false, reason: "AI temporarily paused after repeated errors" };
-  return { available: true };
+  return { available: true, provider: provider.name, model: provider.model() };
 }
 
 /**
- * Call the Messages API and return the text of the response.
+ * Run one model call and return its text.
  * Every call (success or failure) is written to AiLog with token usage + latency.
+ * @param {AiRequest & { task: string, ticketId?: string }} request
  */
-export async function callModel({ task, ticketId, timeoutMs, ...params }) {
+export async function callModel({ task, ticketId, ...req }) {
   const availability = aiAvailability();
   if (!availability.available) throw new AiUnavailableError(availability.reason);
 
+  const provider = activeProvider();
+  const model = provider.model();
   const started = Date.now();
   try {
-    const response = await getClient().messages.create(
-      { model: AI_MODEL, ...params },
-      { timeout: timeoutMs },
-    );
+    const result = await provider.generate(req);
 
-    if (response.stop_reason === "refusal") {
-      throw new AiUnavailableError("Model declined to respond");
-    }
-    if (response.stop_reason === "max_tokens") {
-      throw new AiUnavailableError("Model response was cut off");
-    }
-
-    const text = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
+    if (result.finish === "refusal") throw new AiUnavailableError("Model declined to respond");
+    if (result.finish === "max_tokens") throw new AiUnavailableError("Model response was cut off");
+    const text = result.text.trim();
     if (!text) throw new AiUnavailableError("Model returned an empty response");
 
     breaker.failures = 0;
-    await logUsage({ task, ticketId, started, success: true, usage: response.usage });
+    await logUsage({ task, ticketId, model, started, success: true, usage: result.usage });
     return text;
   } catch (err) {
     breaker.failures += 1;
@@ -78,35 +77,22 @@ export async function callModel({ task, ticketId, timeoutMs, ...params }) {
       breaker.openUntil = Date.now() + COOL_DOWN_MS;
       breaker.failures = 0;
     }
-    const reason = describeError(err);
-    await logUsage({ task, ticketId, started, success: false, error: reason });
+    const reason = err instanceof AiUnavailableError ? err.reason : "Unexpected AI error";
+    await logUsage({ task, ticketId, model, started, success: false, error: reason });
     if (err instanceof AiUnavailableError) throw err;
     throw new AiUnavailableError(reason, err);
   }
 }
 
-function describeError(err) {
-  if (err instanceof AiUnavailableError) return err.reason;
-  if (err instanceof Anthropic.RateLimitError) return "Rate limited by AI provider";
-  if (err instanceof Anthropic.AuthenticationError) return "AI API key is invalid";
-  if (err instanceof Anthropic.APIConnectionTimeoutError) return "AI request timed out";
-  if (err instanceof Anthropic.APIConnectionError) return "Could not reach AI provider";
-  if (err instanceof Anthropic.APIError) return `AI provider error (${err.status})`;
-  return "Unexpected AI error";
-}
-
-async function logUsage({ task, ticketId, started, success, usage, error }) {
+async function logUsage({ task, ticketId, model, started, success, usage, error }) {
   try {
     await prisma.aiLog.create({
       data: {
         task,
         ticketId: ticketId ?? null,
-        model: AI_MODEL,
-        inputTokens:
-          (usage?.input_tokens ?? 0) +
-          (usage?.cache_read_input_tokens ?? 0) +
-          (usage?.cache_creation_input_tokens ?? 0),
-        outputTokens: usage?.output_tokens ?? 0,
+        model,
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
         latencyMs: Date.now() - started,
         success,
         error: error ?? null,

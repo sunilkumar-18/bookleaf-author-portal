@@ -43,20 +43,13 @@ export async function classifyTicket({ ticketId, subject, description }) {
     task: "classify",
     ticketId,
     timeoutMs: 15_000,
-    max_tokens: 300,
+    maxTokens: 300,
     // Triage is a simple task: low effort, no extended reasoning needed.
-    thinking: { type: "disabled" },
-    output_config: {
-      effort: "low",
-      format: { type: "json_schema", schema: OUTPUT_SCHEMA },
-    },
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `<ticket>\nSubject: ${clip(subject, 200)}\n\n${clip(description, 2000)}\n</ticket>`,
-      },
-    ],
+    effort: "low",
+    reasoning: false,
+    jsonSchema: OUTPUT_SCHEMA,
+    system: [{ text: SYSTEM_PROMPT }],
+    user: `<ticket>\nSubject: ${clip(subject, 200)}\n\n${clip(description, 2000)}\n</ticket>`,
   });
 
   const parsed = parseJsonObject(text);

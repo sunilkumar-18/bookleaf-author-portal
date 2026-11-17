@@ -12,7 +12,12 @@ export async function GET() {
   }
   const ai = aiAvailability();
   return NextResponse.json(
-    { status: database === "ok" ? "ok" : "degraded", database, ai: ai.available ? "ok" : ai.reason },
+    {
+      status: database === "ok" ? "ok" : "degraded",
+      database,
+      ai: ai.available ? "ok" : ai.reason,
+      ...(ai.available && { aiProvider: ai.provider, aiModel: ai.model }),
+    },
     { status: database === "ok" ? 200 : 503 },
   );
 }

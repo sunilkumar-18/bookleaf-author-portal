@@ -50,19 +50,18 @@ export async function draftReply(ticket) {
     task: "draft",
     ticketId: ticket.id,
     timeoutMs: 45_000,
-    max_tokens: 4000,
-    output_config: { effort: "medium" },
+    maxTokens: 4000,
+    effort: "medium",
     system: [
-      { type: "text", text: INSTRUCTIONS },
+      { text: INSTRUCTIONS },
       {
-        type: "text",
         text: `<knowledge_base>\n${knowledgeFor(category)}\n</knowledge_base>\n\n<calibration_examples>\n${exampleFor(category)}\n</calibration_examples>`,
         // Prefix (instructions + this category's KB) is identical for every
         // ticket in the category, so it can be served from the prompt cache.
-        cache_control: { type: "ephemeral" },
+        cache: true,
       },
     ],
-    messages: [{ role: "user", content: userContent }],
+    user: userContent,
   });
 }
 
