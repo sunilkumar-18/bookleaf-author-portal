@@ -4,7 +4,10 @@
 //  2. Fallback when the AI is unavailable.
 
 const CATEGORY_RULES = [
-  { category: "ISBN_METADATA", pattern: /\bisbn\b|metadata|wrong (book|title|author name)|imprint|barcode/i },
+  { category: "ISBN_METADATA", pattern: /\bisbn\b|metadata|wrong (book|title|author name)|imprint|barcode|\b(error|mistake|typo|incorrect)\b[^.?!]{0,30}\b(bio|description|title|author name)\b/i },
+  // "Can I update my description/bio?" is a how-to question (General in the brief), even when it names a
+  // platform — checked before Distribution so "on Amazon" doesn't pull it there.
+  { category: "GENERAL", pattern: /\b(update|change|edit)\b[^.?!]{0,40}\b(description|bio|biography|keywords|author photo)\b/i },
   { category: "PRINTING_QUALITY", pattern: /print(ing)? quality|misprint|blurr|binding|pages? (missing|misaligned|torn|loose)|defect|smudg|colou?r (issue|inconsisten)|author copies|reprint/i },
   { category: "DISTRIBUTION", pattern: /unavailable|not available|out of stock|not (showing|listed|visible)|listing|amazon|flipkart|bookleaf store|buy (link|page)/i },
   { category: "ROYALTY_PAYMENTS", pattern: /royalt|payment|payout|paid|bank|earning|money|₹|rs\.?\s?\d|invoice|tax|tds/i },
