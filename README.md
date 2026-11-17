@@ -4,6 +4,8 @@ A support and communication portal for **BookLeaf Publishing**, a self-publishin
 
 **Live demo:** https://bookleaf-author-portal-fawn.vercel.app — sign in with one of the [demo accounts](#demo-accounts) (one-click buttons on the login page).
 
+> **Note on AI in the live demo:** the Anthropic Claude API is a paid service, so the live demo runs **without an API key**. Tickets are labelled by the built-in keyword classifier and admins get a structured reply template instead of an AI draft. The AI integration is fully implemented: add your own `ANTHROPIC_API_KEY` (see [Running locally](#running-locally)) and AI triage and AI-drafted replies switch on automatically, with no code changes.
+
 **Stack:** Next.js 15 (App Router) · React 19 · PostgreSQL on Neon · Prisma · Tailwind CSS 4 · Anthropic Claude API · JWT auth (`jose`) · Zod
 
 ---
@@ -115,7 +117,7 @@ npm run dev                 # http://localhost:3000
 | `DATABASE_URL` | Yes | Pooled Postgres connection (app traffic) |
 | `DATABASE_URL_UNPOOLED` | Yes | Direct Postgres connection (Prisma Migrate) |
 | `JWT_SECRET` | Yes | Session signing secret, 32+ characters |
-| `ANTHROPIC_API_KEY` | No | Enables AI triage and drafts; without it the rule-based fallback is used |
+| `ANTHROPIC_API_KEY` | No | Enables AI triage and drafts; without it the rule-based fallback is used. Paid: create a key at [console.anthropic.com](https://console.anthropic.com) |
 | `AI_MODEL` | No | Claude model ID (default `claude-haiku-5-5`) |
 | `REFERENCE_DATE` | No | Fixed "today" for royalty dates, since the sample data is a snapshot. Leave empty in production |
 
