@@ -1,66 +1,77 @@
 # BookLeaf Author Support Portal
 
-A support and communication portal for **BookLeaf Publishing**, a self-publishing company in India and the US. Authors see their books and royalties and raise support tickets; the operations team works a prioritised ticket queue with AI-assisted triage and reply drafting.
+A support and communication portal for **BookLeaf Publishing**. Authors see their books and royalties and raise support tickets; the operations team works a prioritised ticket queue with AI-assisted triage and reply drafting.
 
-**Live demo:** https://bookleaf-author-portal-fawn.vercel.app — sign in with one of the [demo accounts](#demo-accounts) (one-click buttons on the login page).
+**Live demo:** https://bookleaf-author-portal-fawn.vercel.app — sign in with one of the [test accounts](#test-accounts) (one-click buttons on the login page).
 
-> **Note on AI in the live demo:** the Anthropic Claude API is a paid service, so the live demo runs **without an API key**. Tickets are labelled by the built-in keyword classifier and admins get a structured reply template instead of an AI draft. The AI integration is fully implemented: add your own `ANTHROPIC_API_KEY` (see [Running locally](#running-locally)) and AI triage and AI-drafted replies switch on automatically, with no code changes.
+> **Note on AI in the live demo:** the Anthropic Claude API is a paid service, so the live demo runs **without an API key**. Tickets are labelled by the built-in keyword classifier and admins get a structured reply template instead of an AI draft. The AI integration is fully implemented: add your own `ANTHROPIC_API_KEY` (see [Running locally](#running-locally)) and AI triage and AI-drafted replies switch on automatically, with no code changes. Running without a key also demonstrates the graceful-degradation path end to end.
 
-**Stack:** Next.js 15 (App Router) · React 19 · PostgreSQL on Neon · Prisma · Tailwind CSS 4 · Anthropic Claude API · JWT auth (`jose`) · Zod
+**Stack:** Next.js 15 (App Router) · React 19 · PostgreSQL on Neon · Prisma · Tailwind CSS 4 · Anthropic Claude API (Claude Haiku 5.5) · JWT auth (`jose`) · Zod
+
+**Contents:** [Features](#features) · [Test accounts](#test-accounts) · [Running locally](#running-locally) · [Architecture](#architecture) · [AI integration](#ai-integration) · [Security](#security) · [API reference](#api-reference) · [Known limitations](#known-limitations-and-next-steps) · [Write-up](WRITEUP.md)
 
 ---
 
-## What it does
+## Features
 
 ### Author portal (`/author`)
-- **My Books** — every book with ISBN, MRP, copies sold, royalty earned / paid / pending, last payout and where it is sold. Books still in production show their current stage.
+- **My Books** — every book with title, ISBN, genre, publication date, status, MRP, copies sold, royalty earned / paid / pending, last payout and where it is sold. Books still in production show their current stage instead of sales figures; books with no payout yet say so instead of showing a blank.
 - **Royalty summary** — totals across all books plus the *next payout date*, computed from BookLeaf's policy (quarterly, paid within 45 days of quarter end, ₹1,000 minimum before roll-over).
-- **Support tickets** — raise a ticket against a specific book or the account in general, follow the conversation, and reply. Replying to a resolved ticket re-opens it.
+- **Raise a ticket** — pick a book or "General / Account level", subject, description and an optional attachment (file name recorded; see limitations).
+- **My Tickets** — status, the original query and every team reply, updating without a page refresh. Authors can reply; replying to a resolved ticket re-opens it.
 
 ### Admin portal (`/admin`)
-- **Ticket queue** sorted by urgency (priority, then age), with search (subject, author, `#number`) and filters for status, category, priority, assignee and date range.
+- **Ticket queue** sorted by urgency (priority, then oldest first), with search (subject, author or `#number`) and filters for status, category, priority, assignee and date range. Counters show open, in-progress, critical, unassigned and "mine".
 - **Response-time targets** per priority (Critical 4h · High 24h · Medium 48h · Low 72h) so breaching tickets stand out.
-- **Ticket workspace** — the author's full book/royalty context next to the thread, status and assignment controls, public replies and **internal notes** that authors never see.
-- **AI-drafted replies** grounded in BookLeaf policy and the author's real account data; the admin always reviews and edits before sending.
-- **AI labels are transparent** — category/priority show whether they were set by the AI, keyword rules or an admin, with the AI's one-line reasoning.
+- **Ticket workspace** — the author's book and royalty context next to the thread, status and assignment ("assign to me"), category/priority override, public replies and **internal notes** that authors never see, and "send & resolve" in one step.
+- **AI-drafted replies** grounded in BookLeaf policy and the author's real account data, loaded into an editable reply box. The admin always reviews before sending.
+- **Transparent labels** — category and priority show whether they were set by the AI, keyword rules or an admin, with the AI's one-line reasoning. Admins can re-run AI triage on any ticket.
 
 ---
 
-## How the AI is used
+## Test accounts
 
-| Task | When | What the model sees |
+All sample data from `bookleaf_sample_data.json` (10 authors, 18 books) is seeded, plus 6 demo tickets.
+
+| Role | Email | Password | Good for testing |
+|---|---|---|---|
+| Admin | `admin@bookleaf.com` | `admin123` | Ticket queue, AI drafts, overrides |
+| Admin | `support@bookleaf.com` | `admin123` | Assignment between two admins |
+| Author | `priya.sharma@email.com` | `author123` | Pending royalty on a published book |
+| Author | `sneha.kulkarni@email.com` | `author123` | A book in production (Cover Design) |
+| Author | `kavita.deshmukh@email.com` | `author123` | A book in production (Typesetting) |
+
+Every author in the dataset can log in with their email from the JSON file and the password `author123`.
+
+---
+
+## Running locally
+
+**Requirements:** Node.js 20+ and a PostgreSQL database (a free [Neon](https://neon.com) project works).
+
+```bash
+npm install
+cp .env.example .env        # then fill in the values below
+npx prisma migrate deploy   # create tables
+npm run db:seed             # load the sample authors, books and demo tickets
+npm run dev                 # http://localhost:3000
+```
+
+| Variable | Required | Purpose |
 |---|---|---|
-| **Triage** (category + priority) | Right after a ticket is created, in the background (`after()`), so the author never waits | Subject + description only, clipped |
-| **Reply draft** | First time an admin opens a ticket; cached on the ticket | Relevant knowledge-base section, one example reply, the author's book/royalty facts, last few public messages |
+| `DATABASE_URL` | Yes | Pooled Postgres connection (app traffic) |
+| `DATABASE_URL_UNPOOLED` | Yes | Direct Postgres connection (Prisma Migrate) |
+| `JWT_SECRET` | Yes | Session signing secret, 32+ characters |
+| `ANTHROPIC_API_KEY` | No | Enables AI triage and drafts; without it the rule-based fallback is used. Paid: create a key at [console.anthropic.com](https://console.anthropic.com) |
+| `AI_MODEL` | No | Claude model ID (default `claude-haiku-5-5`) |
+| `REFERENCE_DATE` | No | Fixed "today" for royalty dates, because the sample data is a snapshot (latest payout 2025-12-01). Leave empty in production |
 
-**Designed to never block the product:**
-- A deterministic **keyword classifier** labels every ticket instantly. AI results replace those labels when they arrive, and if the AI is slow, down or unconfigured, the rule-based labels simply stay.
-- A **circuit breaker** stops calling the API for 60 s after 3 consecutive failures, so an outage doesn't add timeout latency to every request.
-- Short timeouts and limited retries fail fast into the fallback.
-- **Admin decisions win** — once an admin changes a label, later AI runs never overwrite it.
-- **Policy guardrails** in code (e.g. ISBN errors are always at least High priority) are applied on top of both AI and rules.
-- Without an API key the app is fully usable: rule-based labels and a structured reply template replace the AI.
-
-**Cost management:**
-- Triage sends only the ticket text — no knowledge base, account data or history — and uses structured JSON output, so there are no retries for malformed responses.
-- Drafts include only the knowledge-base sections for the ticket's category and one calibration example, not the whole knowledge base.
-- Royalty and date arithmetic is **pre-computed in code** and given to the model as facts; the model never does maths.
-- Stable instructions come first with prompt caching, so repeated calls reuse the cached prefix.
-- Drafts are cached per ticket and only regenerated when the conversation or category changes.
-- Every model call is logged to `AiLog` with input/output tokens, latency and success, for cost and latency monitoring.
-
-**Prompt-injection hygiene:** ticket text is treated as untrusted input; prompts instruct the model to classify/answer it, never to follow instructions inside it.
-
----
-
-## Security
-
-- **Two layers of access control.** Edge middleware guards pages and APIs by role; every API handler re-checks the session and role (`apiHandler`), and the service layer enforces ownership (authors only ever see their own tickets and books). A misconfigured middleware matcher can't expose data on its own.
-- **Sessions** are signed JWTs (HS256, 12-hour expiry) in an HTTP-only cookie; the secret must be at least 32 characters.
-- **Passwords** are hashed with bcrypt. Login runs the hash comparison even for unknown emails, so response timing doesn't reveal which accounts exist.
-- **All input is validated** with Zod; malformed JSON returns 400, not 500.
-- **Role-specific serializers** — authors never receive internal notes, AI internals or assignment data.
-- The Anthropic API key is read on the server only.
+| Command | What it does |
+|---|---|
+| `npm run dev` | Development server |
+| `npm run build` | Generate Prisma client, apply migrations, production build |
+| `npm run db:migrate` | Create a new migration during development |
+| `npm run db:reset` | Drop, re-migrate and re-seed the database |
 
 ---
 
@@ -73,19 +84,14 @@ src/
 │   ├── login/               Sign-in page
 │   ├── author/              Author portal (books, tickets)
 │   ├── admin/               Admin queue + ticket workspace
-│   └── api/                 Thin route handlers → services
-│       ├── auth/            login · logout · me
-│       ├── books/
-│       ├── tickets/         list · create · get · update
-│       │   └── [id]/        messages · draft · triage
-│       └── health/          DB + AI status (public)
+│   └── api/                 Thin REST route handlers → services
 ├── lib/
-│   ├── services/            Business logic and ownership rules
-│   ├── ai/                  Claude client, classifier, drafter, rules, knowledge base
+│   ├── services/            Business logic and ownership rules (tickets, books, auth)
+│   ├── ai/                  Claude client, classifier, drafter, keyword rules, knowledge base
 │   ├── auth/                JWT + session helpers
-│   ├── api/                 Handler wrapper + typed errors
+│   ├── api/                 Handler wrapper (auth, RBAC, errors) + typed errors
 │   ├── royalty.js           Payout schedule logic
-│   └── validation.js        Zod schemas
+│   └── validation.js        Zod schemas for every request
 └── components/              Shared UI (AppShell, badges, forms)
 prisma/
 ├── schema.prisma            User · Author · Book · Ticket · TicketMessage · AiLog
@@ -93,60 +99,180 @@ prisma/
 └── seed.js                  Loads prisma/data/bookleaf_sample_data.json
 ```
 
-**Design notes**
-- Route handlers only validate input and call a service; all business rules live in `lib/services`.
-- **Live updates use polling** (every 5–10 s, paused while the tab is hidden) rather than WebSockets: it works reliably on serverless hosting and support tickets don't need sub-second latency.
-- **Database:** Neon Postgres via Prisma — the app uses the pooled connection; migrations use the direct connection.
+### Decisions and why
+
+- **Next.js full-stack (one deployable).** The UI and the REST API live in one project and deploy together to Vercel, which keeps the 4-day scope realistic while still giving a clean API boundary: the frontend only talks to `/api/*` through `fetch`, never to the database.
+- **Layered backend.** Route handlers only parse input (Zod) and call a service; services hold every business and ownership rule; the AI layer is separate again. Swapping the UI, the AI provider or the database touches one layer.
+- **PostgreSQL + Prisma.** Tickets, messages, users and books are relational and the queue needs filtered, sorted, indexed queries (`status, priority, createdAt`). Prisma gives typed queries and versioned migrations. Neon provides the pooled connection for serverless traffic and a direct one for migrations.
+- **Authors and users are separate tables.** `Author` holds the business record from the dataset; `User` holds login and role. Admins are users without an author record, so ownership checks are a single `authorId` comparison.
+- **Labels remember who set them.** `categorySource` / `prioritySource` (`AI`, `RULES`, `ADMIN`) let the UI show provenance and stop a late AI result from overwriting an admin's decision.
+- **Polling for live updates** (every 5–10 s, paused while the tab is hidden). Vercel functions can't hold WebSocket connections, and support tickets don't need sub-second latency; polling is the most reliable option on this hosting.
+- **Stateless JWT sessions** in an HTTP-only cookie, verified the same way in Edge middleware and in route handlers.
 
 ---
 
-## Running locally
+## AI integration
 
-**Requirements:** Node.js 20+ and a PostgreSQL database (a free [Neon](https://neon.com) project works).
+### Where the AI is used
 
-```bash
-npm install
-cp .env.example .env        # then fill in the values below
-npx prisma migrate deploy   # create tables
-npm run db:seed             # load sample authors, books and tickets
-npm run dev                 # http://localhost:3000
+| Task | When it runs | What the model sees |
+|---|---|---|
+| **Triage** — category + priority + one-line reason | Right after a ticket is created, in the background via Next.js `after()`, so the author never waits | Subject + description only (clipped) |
+| **Reply draft** | First time an admin opens a ticket; cached on the ticket | The knowledge-base sections for that category, one calibration example, the author's book/royalty facts, the last few public messages |
+
+### Model choice: Claude Haiku 5.5
+
+- **Cost:** about $0.10 per million input tokens and $0.50 per million output tokens, so triage plus one draft costs a fraction of a cent per ticket — sensible for 1,200+ books a month and the support volume that comes with them.
+- **Speed:** triage runs on every new ticket, so low latency matters more than deep reasoning.
+- **Structured outputs:** triage uses a JSON schema, so the category and priority are always valid enum values and never need a retry.
+- **Prompt caching:** the stable instructions are cached, cutting the cost of repeated drafts.
+- **Swappable:** the model comes from `AI_MODEL`, so drafts could move to a larger model (e.g. Claude Sonnet) by changing one variable.
+
+### Prompt strategy
+
+- **Classifier** (`src/lib/ai/classifier.js`): a system prompt with a definition for each of the six categories and a priority rubric based on business impact, not the author's tone (e.g. "no royalty for 6+ months" → Critical, "update my bio" → Low). Low effort, no extended reasoning, JSON-schema output.
+- **Drafter** (`src/lib/ai/drafter.js`): writes as a senior BookLeaf support agent using the brief's tone guidelines (acknowledge first, be specific, own BookLeaf's mistakes, give a timeline, end with a next step). It must ground every fact in the supplied knowledge base and account data and never invent figures, dates or policies. Output is plain text, 120–220 words, signed "BookLeaf Author Support".
+- **Account facts are computed in code** (`src/lib/ai/context.js`, `src/lib/royalty.js`): the next payout date, pending amounts and the ₹1,000 threshold are worked out before the call and given to the model as data, so the model never does date or currency arithmetic.
+- **Prompt-injection hygiene:** ticket text is wrapped in tags and treated as untrusted input; both prompts tell the model to classify or answer it, never follow instructions inside it.
+
+### Error handling and graceful degradation
+
+- A deterministic **keyword classifier** (`src/lib/ai/rules.js`) labels every ticket instantly at creation. The AI result replaces those labels when it arrives; if the AI is slow, down, rate-limited or unconfigured, the rule-based labels stay. It handles all nine sample queries in the brief correctly.
+- **Policy guardrails** in code apply on top of both AI and rules — e.g. ISBN errors are always at least High priority.
+- **Timeouts and retries:** 15 s for triage, 45 s for drafts; the SDK retries 429/5xx twice with backoff, then the call fails fast into the fallback.
+- **Circuit breaker:** after 3 consecutive failures, AI calls are skipped for 60 s so an outage doesn't add timeout latency to every request.
+- **Refusals and truncation** are detected and treated as failures, not shown to admins.
+- **Drafts fall back to a structured template** with the author's name and placeholders, so admins can always write and send a reply manually. The UI says why the AI draft is unavailable.
+- **Admin decisions win:** once an admin overrides a label, later AI runs never change it. Admins can re-run triage after an outage.
+
+### Cost management
+
+- **Triage sends only the ticket text** — no knowledge base, account data or history.
+- **Drafts send only what the category needs:** the matching knowledge-base sections (not the whole knowledge base), one example, the referenced book in full and other books as one-liners, and only the last 4 public messages, each clipped.
+- **Caching at two levels:** prompt caching on the stable instruction prefix, and each draft is stored on the ticket so re-opening it costs nothing. It is regenerated only when the conversation or category changes.
+- **Every model call is logged** to the `AiLog` table with input/output tokens, latency and success, as the basis for cost and latency monitoring.
+
+---
+
+## Security
+
+- **API key** is read from the environment on the server only; no AI module is imported by client components, and `.env` is git-ignored.
+- **Two layers of access control:** Edge middleware guards every page and API route by role; every API handler re-checks the session and role (`apiHandler`), and the service layer enforces ownership (authors only ever see their own tickets and books). A misconfigured middleware matcher can't expose data on its own.
+- **Sessions** are signed JWTs (HS256, 12-hour expiry) in an HTTP-only cookie; the secret must be at least 32 characters.
+- **Passwords** are hashed with bcrypt. Login runs the hash comparison even for unknown emails, so response timing doesn't reveal which accounts exist.
+- **All input is validated** with Zod; malformed JSON returns 400, not 500, and unexpected errors are logged server-side without leaking details.
+- **Role-specific serializers:** authors never receive internal notes, AI reasoning or assignment data.
+
+---
+
+## API reference
+
+All endpoints are under `/api`, accept and return JSON, and require a session unless marked public. Authenticate with the `bl_session` cookie set by login, or send `Authorization: Bearer <token>` using the token login returns.
+
+**Success:** `{ "data": ... }` (lists add `pagination`, and for admins `summary`).
+**Errors:** always `{ "error": { "code", "message", "details?" } }`.
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Malformed JSON or an invalid operation |
+| 401 | `UNAUTHORIZED` | Missing, invalid or expired session |
+| 401 | `INVALID_CREDENTIALS` | Wrong email or password at login |
+| 403 | `FORBIDDEN` | Role not allowed (e.g. an author calling an admin endpoint) |
+| 404 | `NOT_FOUND` | Record missing, or belongs to another author |
+| 409 | `CONFLICT` | Duplicate record |
+| 422 | `VALIDATION_ERROR` | Field errors in `details: [{ field, message }]` |
+| 503 | `DATABASE_UNAVAILABLE` | Database unreachable |
+
+### Auth
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `POST` | `/api/auth/login` | Public | Body `{ email, password }`. Sets the session cookie and returns `{ user, token }` |
+| `POST` | `/api/auth/logout` | Public | Clears the session cookie. `204 No Content` |
+| `GET` | `/api/auth/me` | Any user | The current user: `id, role, authorId, name, email` |
+
+### Books
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/books` | Author, Admin | Authors get their own books plus a royalty `summary` (totals and next payout). Admins get all books; filter with `?authorId=AUTH001` |
+
+### Tickets
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/tickets` | Author, Admin | Authors: own tickets, most recently updated first. Admins: the queue, most urgent then oldest first, plus `summary` counters |
+| `POST` | `/api/tickets` | Author | Raise a ticket. Returns `201` immediately with rule-based labels; AI triage runs in the background |
+| `GET` | `/api/tickets/:id` | Author (own), Admin | Ticket with its full thread. Authors don't receive internal notes |
+| `PATCH` | `/api/tickets/:id` | Admin | Update `status`, override `category` / `priority`, set `assigneeId` |
+| `POST` | `/api/tickets/:id/messages` | Author (own), Admin | Add a reply. Admins can add an internal note or change status in the same call |
+| `GET` | `/api/tickets/:id/draft` | Admin | The AI draft for the ticket, generated on first request and then cached |
+| `POST` | `/api/tickets/:id/draft` | Admin | Force a new draft ("Regenerate") |
+| `POST` | `/api/tickets/:id/triage` | Admin | Re-run AI classification (e.g. after an outage). Never overrides admin-set labels |
+
+**`GET /api/tickets` query parameters** (all optional)
+
+| Param | Values |
+|---|---|
+| `status` | `OPEN`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`, `active` (Open + In Progress; the admin default) or `all` |
+| `category` | `ROYALTY_PAYMENTS`, `ISBN_METADATA`, `PRINTING_QUALITY`, `DISTRIBUTION`, `PRODUCTION_STATUS`, `GENERAL` |
+| `priority` | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` |
+| `assignee` | `me`, `unassigned`, `any` |
+| `from`, `to` | Created-date range, e.g. `2026-01-01` |
+| `q` | Search subject, author name or ticket number |
+| `page`, `pageSize` | Pagination (default 1 and 25, max 100) |
+
+**`POST /api/tickets` body**
+
+```json
+{
+  "bookId": "BK002",
+  "subject": "Royalty for last quarter not received",
+  "description": "My Q3 royalty hasn't arrived and my bank details haven't changed.",
+  "attachmentName": "statement.pdf"
+}
 ```
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `DATABASE_URL` | Yes | Pooled Postgres connection (app traffic) |
-| `DATABASE_URL_UNPOOLED` | Yes | Direct Postgres connection (Prisma Migrate) |
-| `JWT_SECRET` | Yes | Session signing secret, 32+ characters |
-| `ANTHROPIC_API_KEY` | No | Enables AI triage and drafts; without it the rule-based fallback is used. Paid: create a key at [console.anthropic.com](https://console.anthropic.com) |
-| `AI_MODEL` | No | Claude model ID (default `claude-haiku-5-5`) |
-| `REFERENCE_DATE` | No | Fixed "today" for royalty dates, since the sample data is a snapshot. Leave empty in production |
+`bookId` may be `null` or `"GENERAL"` for an account-level query. `subject` 5–150 characters; `description` 20–5000 characters; `attachmentName` optional.
 
-### Demo accounts
+**`PATCH /api/tickets/:id` body** — at least one field
 
-| Role | Email | Password |
-|---|---|---|
-| Author | `priya.sharma@email.com` | `author123` |
-| Author (books in production) | `sneha.kulkarni@email.com` | `author123` |
-| Admin | `admin@bookleaf.com` | `admin123` |
+```json
+{ "status": "IN_PROGRESS", "category": "ROYALTY_PAYMENTS", "priority": "HIGH", "assigneeId": "me" }
+```
 
-The login page also has one-click buttons for these accounts.
+`assigneeId` is `"me"`, a user ID, or `null` to unassign. A category or priority sent here is marked as set by an admin.
 
-### Useful scripts
+**`POST /api/tickets/:id/messages` body**
 
-| Command | What it does |
-|---|---|
-| `npm run dev` | Development server |
-| `npm run build` | Generate Prisma client, apply migrations, production build |
-| `npm run db:migrate` | Create a new migration during development |
-| `npm run db:reset` | Drop, re-migrate and re-seed the database |
-| `GET /api/health` | Reports database and AI status |
+```json
+{ "body": "Hi Priya, ...", "isInternal": false, "usedAiDraft": true, "setStatus": "RESOLVED" }
+```
+
+`isInternal` and `setStatus` are admin-only (an author sending them gets `403`). An admin's first public reply sets an open ticket to In Progress; an author's reply re-opens a resolved ticket.
+
+**Draft response**
+
+```json
+{ "data": { "draft": "Hi Priya, ...", "source": "AI", "cached": true, "generatedAt": "2026-11-17T13:12:18.386Z" } }
+```
+
+`source` is `"TEMPLATE"` with an `unavailableReason` when the AI can't be used.
+
+### Health
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/health` | Public | Database and AI status, e.g. `{ "status": "ok", "database": "ok", "ai": "ok" }`. Returns `503` if the database is down. Exposes no secrets |
 
 ---
 
-## Trade-offs and next steps
+## Known limitations and next steps
 
-- **Attachments** are recorded by file name only; real uploads would go to object storage.
-- The **circuit breaker** is in memory per server instance; with several instances it should move to a shared store such as Redis.
-- **Polling** would move to server-sent events or a realtime service if the queue grew large.
-- **Automated tests** for the service layer, royalty logic and rule classifier would be the next addition.
-- **Email notifications** to authors when the team replies.
+- **No AI key on the live demo** (paid API) — the fallback path is what reviewers see there; the AI path needs a key.
+- **Attachments** are recorded by file name only; real uploads would go to object storage with virus scanning.
+- **Circuit breaker** state is in memory per server instance; with several instances it should move to a shared store such as Redis.
+- **Polling** would move to server-sent events or a managed realtime service as the queue grows.
+- **No automated tests yet** — the next addition would be unit tests for the service layer, royalty logic and keyword classifier, plus an evaluation set for AI triage accuracy against labelled tickets.
+- **Notifications:** authors should get an email when the team replies.
+- **Admin tooling:** canned responses, bulk actions and SLA reporting from the `AiLog` and ticket timestamps.
