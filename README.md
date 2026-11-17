@@ -4,9 +4,9 @@ A support and communication portal for **BookLeaf Publishing**. Authors see thei
 
 **Live demo:** https://bookleaf-author-portal-fawn.vercel.app — sign in with one of the [test accounts](#test-accounts) (one-click buttons on the login page).
 
-> **Note on AI in the live demo:** the Anthropic Claude API is a paid service, so the live demo runs **without an API key**. Tickets are labelled by the built-in keyword classifier and admins get a structured reply template instead of an AI draft. The AI integration is fully implemented: add your own `ANTHROPIC_API_KEY` (see [Running locally](#running-locally)) and AI triage and AI-drafted replies switch on automatically, with no code changes. Running without a key also demonstrates the graceful-degradation path end to end.
+> **AI provider:** the AI layer supports **Google Gemini** and **Anthropic Claude** behind one interface; whichever key is set is used. The live demo runs on **Gemini Flash-Lite (free tier)** because the Claude API is paid. Adding an `ANTHROPIC_API_KEY` switches it to Claude Haiku 5.5 with no code changes, and with no key at all the app falls back to keyword labels and reply templates (see [AI integration](#ai-integration)).
 
-**Stack:** Next.js 15 (App Router) · React 19 · PostgreSQL on Neon · Prisma · Tailwind CSS 4 · Anthropic Claude API (Claude Haiku 5.5) · JWT auth (`jose`) · Zod
+**Stack:** Next.js 15 (App Router) · React 19 · PostgreSQL on Neon · Prisma · Tailwind CSS 4 · Google Gemini / Anthropic Claude · JWT auth (`jose`) · Zod
 
 **Contents:** [Features](#features) · [Test accounts](#test-accounts) · [Running locally](#running-locally) · [Architecture](#architecture) · [AI integration](#ai-integration) · [Security](#security) · [API reference](#api-reference) · [Known limitations](#known-limitations-and-next-steps) · [Write-up](WRITEUP.md)
 
@@ -62,8 +62,13 @@ npm run dev                 # http://localhost:3000
 | `DATABASE_URL` | Yes | Pooled Postgres connection (app traffic) |
 | `DATABASE_URL_UNPOOLED` | Yes | Direct Postgres connection (Prisma Migrate) |
 | `JWT_SECRET` | Yes | Session signing secret, 32+ characters |
-| `ANTHROPIC_API_KEY` | No | Enables AI triage and drafts; without it the rule-based fallback is used. Paid: create a key at [console.anthropic.com](https://console.anthropic.com) |
-| `AI_MODEL` | No | Claude model ID (default `claude-haiku-5-5`) |
+| `GEMINI_API_KEY` | No* | Enables AI with Google Gemini. Free tier: create a key at [aistudio.google.com](https://aistudio.google.com) |
+| `GEMINI_MODEL` | No | Gemini model ID (default `gemini-flash-lite-latest`) |
+| `ANTHROPIC_API_KEY` | No* | Enables AI with Anthropic Claude. Paid: create a key at [console.anthropic.com](https://console.anthropic.com) |
+| `ANTHROPIC_MODEL` | No | Claude model ID (default `claude-haiku-5-5`; the older name `AI_MODEL` also works) |
+| `AI_PROVIDER` | No | Force `gemini` or `anthropic` when both keys are set (default: Anthropic first) |
+
+\* Set one AI key to enable AI triage and drafts. Without any, the app uses the rule-based fallback.
 | `REFERENCE_DATE` | No | Fixed "today" for royalty dates, because the sample data is a snapshot (latest payout 2025-12-01). Leave empty in production |
 
 | Command | What it does |
@@ -87,7 +92,8 @@ src/
 │   └── api/                 Thin REST route handlers → services
 ├── lib/
 │   ├── services/            Business logic and ownership rules (tickets, books, auth)
-│   ├── ai/                  Claude client, classifier, drafter, keyword rules, knowledge base
+│   ├── ai/                  AI client (breaker, logging), classifier, drafter, keyword rules, knowledge base
+│   │   └── providers/       Gemini and Anthropic adapters
 │   ├── auth/                JWT + session helpers
 │   ├── api/                 Handler wrapper (auth, RBAC, errors) + typed errors
 │   ├── royalty.js           Payout schedule logic
@@ -105,6 +111,7 @@ prisma/
 - **Layered backend.** Route handlers only parse input (Zod) and call a service; services hold every business and ownership rule; the AI layer is separate again. Swapping the UI, the AI provider or the database touches one layer.
 - **PostgreSQL + Prisma.** Tickets, messages, users and books are relational and the queue needs filtered, sorted, indexed queries (`status, priority, createdAt`). Prisma gives typed queries and versioned migrations. Neon provides the pooled connection for serverless traffic and a direct one for migrations.
 - **Authors and users are separate tables.** `Author` holds the business record from the dataset; `User` holds login and role. Admins are users without an author record, so ownership checks are a single `authorId` comparison.
+- **Provider-neutral AI layer.** The classifier and drafter describe what they need (system blocks, user text, token limit, effort, optional JSON schema); a small adapter per provider translates that into a Gemini or Anthropic call. The circuit breaker, refusal handling and usage logging live once in `client.js`, so adding another provider is one new file.
 - **Labels remember who set them.** `categorySource` / `prioritySource` (`AI`, `RULES`, `ADMIN`) let the UI show provenance and stop a late AI result from overwriting an admin's decision.
 - **Polling for live updates** (every 5–10 s, paused while the tab is hidden). Vercel functions can't hold WebSocket connections, and support tickets don't need sub-second latency; polling is the most reliable option on this hosting.
 - **Stateless JWT sessions** in an HTTP-only cookie, verified the same way in Edge middleware and in route handlers.
@@ -120,13 +127,14 @@ prisma/
 | **Triage** — category + priority + one-line reason | Right after a ticket is created, in the background via Next.js `after()`, so the author never waits | Subject + description only (clipped) |
 | **Reply draft** | First time an admin opens a ticket; cached on the ticket | The knowledge-base sections for that category, one calibration example, the author's book/royalty facts, the last few public messages |
 
-### Model choice: Claude Haiku 5.5
+### Model choice: small, fast models — Gemini Flash-Lite or Claude Haiku 5.5
 
-- **Cost:** about $0.10 per million input tokens and $0.50 per million output tokens, so triage plus one draft costs a fraction of a cent per ticket — sensible for 1,200+ books a month and the support volume that comes with them.
-- **Speed:** triage runs on every new ticket, so low latency matters more than deep reasoning.
-- **Structured outputs:** triage uses a JSON schema, so the category and priority are always valid enum values and never need a retry.
-- **Prompt caching:** the stable instructions are cached, cutting the cost of repeated drafts.
-- **Swappable:** the model comes from `AI_MODEL`, so drafts could move to a larger model (e.g. Claude Sonnet) by changing one variable.
+Both tasks are high-volume and well-specified (pick one of six labels; write a 150–200-word reply from supplied facts), so a small, fast model is the right fit; a frontier model would add cost and latency without a visible quality gain.
+
+- **Gemini Flash-Lite** (`gemini-flash-lite-latest`, the live demo): has a **free tier**, so the demo can show real AI without a paid key. Triage takes about 1 s and a draft about 2 s; in testing it labelled the brief's sample queries correctly and drafts quoted the author's real royalty figures and payout date.
+- **Claude Haiku 5.5** (`claude-haiku-5-5`, recommended for production): about $0.10 / $0.50 per million input / output tokens, so triage plus one draft costs a fraction of a cent per ticket — sensible for 1,200+ books a month. Paid API, data not used for training, and explicit prompt caching.
+- **Both support structured outputs:** triage uses a JSON schema, so the category and priority are always valid enum values and never need a retry.
+- **Swappable:** provider and model are environment variables, so drafts could move to a larger model (e.g. Claude Sonnet) by changing one value.
 
 ### Prompt strategy
 
@@ -139,7 +147,7 @@ prisma/
 
 - A deterministic **keyword classifier** (`src/lib/ai/rules.js`) labels every ticket instantly at creation. The AI result replaces those labels when it arrives; if the AI is slow, down, rate-limited or unconfigured, the rule-based labels stay. It handles all nine sample queries in the brief correctly.
 - **Policy guardrails** in code apply on top of both AI and rules — e.g. ISBN errors are always at least High priority.
-- **Timeouts and retries:** 15 s for triage, 45 s for drafts; the SDK retries 429/5xx twice with backoff, then the call fails fast into the fallback.
+- **Timeouts and retries:** 15 s for triage, 45 s for drafts; rate limits (429) and server errors (5xx, including Gemini's "high demand" 503) are retried twice with backoff, then the call fails fast into the fallback.
 - **Circuit breaker:** after 3 consecutive failures, AI calls are skipped for 60 s so an outage doesn't add timeout latency to every request.
 - **Refusals and truncation** are detected and treated as failures, not shown to admins.
 - **Drafts fall back to a structured template** with the author's name and placeholders, so admins can always write and send a reply manually. The UI says why the AI draft is unavailable.
@@ -149,7 +157,7 @@ prisma/
 
 - **Triage sends only the ticket text** — no knowledge base, account data or history.
 - **Drafts send only what the category needs:** the matching knowledge-base sections (not the whole knowledge base), one example, the referenced book in full and other books as one-liners, and only the last 4 public messages, each clipped.
-- **Caching at two levels:** prompt caching on the stable instruction prefix, and each draft is stored on the ticket so re-opening it costs nothing. It is regenerated only when the conversation or category changes.
+- **Caching at two levels:** the stable instruction prefix comes first so the provider can cache it (explicit `cache_control` on Claude, implicit caching on Gemini), and each draft is stored on the ticket so re-opening it costs nothing. It is regenerated only when the conversation or category changes.
 - **Every model call is logged** to the `AiLog` table with input/output tokens, latency and success, as the basis for cost and latency monitoring.
 
 ---
@@ -263,13 +271,13 @@ All endpoints are under `/api`, accept and return JSON, and require a session un
 
 | Method | Path | Access | Description |
 |---|---|---|---|
-| `GET` | `/api/health` | Public | Database and AI status, e.g. `{ "status": "ok", "database": "ok", "ai": "ok" }`. Returns `503` if the database is down. Exposes no secrets |
+| `GET` | `/api/health` | Public | Database and AI status, e.g. `{ "status": "ok", "database": "ok", "ai": "ok", "aiProvider": "gemini", "aiModel": "gemini-flash-lite-latest" }`. Returns `503` if the database is down. Exposes no secrets |
 
 ---
 
 ## Known limitations and next steps
 
-- **No AI key on the live demo** (paid API) — the fallback path is what reviewers see there; the AI path needs a key.
+- **Free-tier AI on the live demo.** Gemini's free tier has tight rate limits and Google may use free-tier prompts to improve its products; heavy use falls back to keyword labels and templates. Production would use a paid key (Claude Haiku 5.5) — a configuration change only.
 - **Attachments** are recorded by file name only; real uploads would go to object storage with virus scanning.
 - **Circuit breaker** state is in memory per server instance; with several instances it should move to a shared store such as Redis.
 - **Polling** would move to server-sent events or a managed realtime service as the queue grows.

@@ -15,9 +15,9 @@ In order, I prioritised:
 
 - **Next.js for both UI and API.** One deployable kept the scope achievable in four days while still keeping a clean REST boundary. At larger scale I would split the API into its own service.
 - **Polling instead of WebSockets.** Vercel functions can't hold long-lived connections, and support tickets don't need sub-second updates. Polling every 5–10 seconds, paused in background tabs, is reliable and simple.
-- **Claude Haiku 5.5.** Fast and inexpensive for high-volume triage, with structured outputs that guarantee valid labels. The model is one environment variable, so drafts could move to a larger model if quality demands it.
+- **Small, fast models behind a provider-neutral layer.** Triage and drafting are high-volume, well-specified tasks, so I chose small models with structured outputs that guarantee valid labels: Claude Haiku 5.5 for production, and Gemini Flash-Lite for the live demo because it has a free tier. Each provider is one small adapter; the provider and model are environment variables.
 - **Attachments are UI-only**, as the brief allows; real uploads need storage and scanning.
-- **No paid API key on the live demo.** The AI code path is complete; the demo shows the degraded mode, which is also how the system behaves during an AI outage.
+- **Free-tier AI on the live demo.** Its rate limits are tight, so under heavy use some tickets fall back to keyword labels and templates — the same path the system takes during a real AI outage.
 - **No automated test suite yet.** I verified the flows end to end by hand and checked the keyword classifier against every sample query in the brief; tests are the first thing I'd add.
 
 ## Evolving this into a production system
