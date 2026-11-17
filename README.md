@@ -2,6 +2,8 @@
 
 A support and communication portal for **BookLeaf Publishing**, a self-publishing company in India and the US. Authors see their books and royalties and raise support tickets; the operations team works a prioritised ticket queue with AI-assisted triage and reply drafting.
 
+**Live demo:** https://bookleaf-author-portal-fawn.vercel.app — sign in with one of the [demo accounts](#demo-accounts) (one-click buttons on the login page).
+
 **Stack:** Next.js 15 (App Router) · React 19 · PostgreSQL on Neon · Prisma · Tailwind CSS 4 · Anthropic Claude API · JWT auth (`jose`) · Zod
 
 ---
