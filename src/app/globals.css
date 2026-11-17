@@ -1,8 +1,9 @@
 @import "tailwindcss";
 
+/* BookLeaf Publishing brand — coral #EF6976 sampled from the logo, near-black wordmark on white. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #faf8f8;
+  --foreground: #1c1c1c;
 }
 
 @theme inline {
@@ -10,17 +11,25 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-brand-50: #fdf1f2;
+  --color-brand-100: #fbe1e4;
+  --color-brand-200: #f7c3c8;
+  --color-brand-300: #f39ba4;
+  --color-brand-400: #f1808b;
+  --color-brand-500: #ef6976; /* logo coral */
+  --color-brand-600: #db4f60; /* buttons (white text) */
+  --color-brand-700: #b83a4a; /* links / accent text on white */
+  --color-brand-800: #93303d;
+  --color-brand-900: #772a34;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+::selection {
+  background: var(--color-brand-200);
 }

@@ -1,0 +1,198 @@
+// BookLeaf Author Support Portal — database schema
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Neon pooled connection — app traffic
+  directUrl = env("DATABASE_URL_UNPOOLED") // Neon direct connection — Prisma Migrate
+}
+
+enum Role {
+  AUTHOR
+  ADMIN
+}
+
+enum BookStatus {
+  PUBLISHED
+  IN_PRODUCTION
+}
+
+// Enum declaration order matters: Postgres sorts enums by declaration order,
+// so `orderBy: { priority: "asc" }` puts CRITICAL first.
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketCategory {
+  ROYALTY_PAYMENTS
+  ISBN_METADATA
+  PRINTING_QUALITY
+  DISTRIBUTION
+  PRODUCTION_STATUS
+  GENERAL
+}
+
+// Who decided a ticket's category / priority. Lets admins see at a glance
+// which labels came from the model, from the keyword fallback, or from a human.
+enum LabelSource {
+  AI
+  RULES
+  ADMIN
+}
+
+enum AiStatus {
+  PENDING
+  DONE
+  FAILED
+}
+
+enum DraftSource {
+  AI
+  TEMPLATE
+}
+
+/// Login identity. Authors are linked 1:1 to an Author record; admins are not.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  authorId     String?  @unique
+  author       Author?  @relation(fields: [authorId], references: [id])
+  createdAt    DateTime @default(now())
+
+  assignedTickets Ticket[]        @relation("TicketAssignee")
+  messages        TicketMessage[]
+}
+
+/// Author profile, seeded from bookleaf_sample_data.json (ids like AUTH001).
+model Author {
+  id         String   @id
+  name       String
+  email      String   @unique
+  phone      String?
+  city       String?
+  joinedDate DateTime @db.Date
+
+  user    User?
+  books   Book[]
+  tickets Ticket[]
+}
+
+/// Book record. Royalty amounts are stored in whole rupees (the dataset uses integers).
+/// Books still in production have null MRP / publication date / royalty-per-copy.
+model Book {
+  id              String     @id
+  authorId        String
+  author          Author     @relation(fields: [authorId], references: [id])
+  title           String
+  isbn            String     @unique
+  genre           String
+  status          BookStatus
+  productionStage String? // e.g. "Cover Design" when status = IN_PRODUCTION
+  publicationDate DateTime?  @db.Date
+  mrp             Int?
+  royaltyPerCopy  Int?
+  copiesSold      Int        @default(0)
+  royaltyEarned   Int        @default(0)
+  royaltyPaid     Int        @default(0)
+  royaltyPending  Int        @default(0)
+  lastPayoutDate  DateTime?  @db.Date
+  printPartner    String?
+  availableOn     String[]
+
+  tickets Ticket[]
+
+  @@index([authorId])
+}
+
+model Ticket {
+  id          String  @id @default(cuid())
+  number      Int     @unique @default(autoincrement()) // human-friendly "#1042"
+  authorId    String
+  author      Author  @relation(fields: [authorId], references: [id])
+  bookId      String? // null = "General / Account level"
+  book        Book?   @relation(fields: [bookId], references: [id])
+  subject     String
+  description String
+  attachmentName String? // UI-only attachment: we record the file name, not the file
+
+  status TicketStatus @default(OPEN)
+
+  category       TicketCategory @default(GENERAL)
+  categorySource LabelSource    @default(RULES)
+  priority       Priority       @default(MEDIUM)
+  prioritySource LabelSource    @default(RULES)
+
+  // AI triage bookkeeping
+  aiStatus    AiStatus @default(PENDING)
+  aiReasoning String? // one-line rationale from the classifier, shown to admins only
+
+  // Cached AI draft — generated once when an admin first opens the ticket,
+  // so re-opening the ticket does not cost another model call.
+  aiDraft       String?
+  aiDraftSource DraftSource?
+  aiDraftAt     DateTime?
+
+  assigneeId String?
+  assignee   User?   @relation("TicketAssignee", fields: [assigneeId], references: [id])
+
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  messages TicketMessage[]
+  aiLogs   AiLog[]
+
+  @@index([status, priority, createdAt])
+  @@index([authorId, updatedAt])
+  @@index([assigneeId])
+}
+
+/// A reply on a ticket. `isInternal` notes are visible to admins only.
+model TicketMessage {
+  id           String   @id @default(cuid())
+  ticketId     String
+  ticket       Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderId     String
+  sender       User     @relation(fields: [senderId], references: [id])
+  body         String
+  isInternal   Boolean  @default(false)
+  usedAiDraft  Boolean  @default(false) // admin started from the AI draft
+  createdAt    DateTime @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+/// One row per model call — evidence for cost/latency monitoring.
+model AiLog {
+  id           String   @id @default(cuid())
+  ticketId     String?
+  ticket       Ticket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  task         String // "classify" | "draft"
+  model        String
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  latencyMs    Int      @default(0)
+  success      Boolean
+  error        String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+}
