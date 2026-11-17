@@ -151,7 +151,7 @@ Both tasks are high-volume and well-specified (pick one of six labels; write a 1
 - **Circuit breaker:** after 3 consecutive failures, AI calls are skipped for 60 s so an outage doesn't add timeout latency to every request.
 - **Refusals and truncation** are detected and treated as failures, not shown to admins.
 - **Drafts fall back to a structured template** with the author's name and placeholders, so admins can always write and send a reply manually. The UI says why the AI draft is unavailable.
-- **Admin decisions win:** once an admin overrides a label, later AI runs never change it. Admins can re-run triage after an outage.
+- **Admin decisions win:** once an admin overrides a label, a late or background AI result never changes it. Only an explicit "re-run AI triage" by an admin hands the labels back to the AI (useful after an outage).
 
 ### Cost management
 
@@ -216,7 +216,7 @@ All endpoints are under `/api`, accept and return JSON, and require a session un
 | `POST` | `/api/tickets/:id/messages` | Author (own), Admin | Add a reply. Admins can add an internal note or change status in the same call |
 | `GET` | `/api/tickets/:id/draft` | Admin | The AI draft for the ticket, generated on first request and then cached |
 | `POST` | `/api/tickets/:id/draft` | Admin | Force a new draft ("Regenerate") |
-| `POST` | `/api/tickets/:id/triage` | Admin | Re-run AI classification (e.g. after an outage). Never overrides admin-set labels |
+| `POST` | `/api/tickets/:id/triage` | Admin | Re-run AI classification (e.g. after an outage). This is an explicit admin action, so it hands category and priority back to the AI, replacing earlier overrides |
 
 **`GET /api/tickets` query parameters** (all optional)
 
